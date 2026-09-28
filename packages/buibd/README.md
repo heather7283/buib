@@ -9,6 +9,9 @@ Bluetooth connection, and serves `buibctl` on a UNIX socket.
   Bluetooth code path can close it.
 * Bluetooth failures are reported through the `status` command; they never
   terminate the process and never unregister the input device.
+* Every Bluetooth failure is logged with its full traceback, because a one line
+  message is rarely enough to diagnose one.  `--no-log-traceback` turns that
+  off; the reply to `buibctl` stays a single line either way.
 * On disconnect the session releases the keys, buttons and contacts it was
   holding down, so nothing gets stuck.
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import pathlib
@@ -65,9 +66,12 @@ _HID_DESCRIPTOR_TYPE_REPORT: Final = 0x22
 #: ``classic1.json`` example, with the key store kept in the state directory.
 DEFAULT_CONFIG: Final[dict[str, Any]] = {
     "name": "buib",
-    "class_of_device": 0x000100,  # computer / laptop
+    "class_of_device": 2360324,  # computer / laptop
     "keystore": "JsonKeyStore",
 }
+
+#: Where link keys live when no configuration file says otherwise.
+KEYSTORE_NAME: Final = "keystore.json"
 
 #: Seconds allowed for each stage of a connection attempt.
 DEFAULT_CONNECT_TIMEOUT: Final = 30.0
@@ -159,6 +163,33 @@ def _to_python(element: bumble.sdp.DataElement) -> Any:
     if isinstance(element.value, bytes):
         return element.value.decode("utf-8", "replace")
     return element.value
+
+
+def _ensure_keystore(path: pathlib.Path) -> None:
+    """Make sure the key store exists as a readable-by-JSON, private file.
+
+    bumble's ``JsonKeyStore.load`` tolerates a *missing* file but not an empty
+    one, and it creates the file itself on the first save - with whatever the
+    umask allows.  Link keys are secrets, so the file is created here instead:
+    valid JSON, mode 0600, and never truncating an existing key store.
+
+    An empty file is a real state that older versions of buibd left behind, so
+    it is repaired rather than reported.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        if path.stat().st_size:
+            return
+        logger.info("repairing the empty key store at %s", path)
+        handle = os.open(path, os.O_WRONLY | os.O_TRUNC)
+    except OSError as error:
+        raise BluetoothError(
+            f"could not create the key store at {path}: {error}"
+        ) from error
+    with os.fdopen(handle, "w", encoding="utf-8") as output:
+        json.dump({}, output)
 
 
 def _as_int(value: Any) -> int | None:
@@ -360,10 +391,8 @@ class BluetoothController:
         for key, value in DEFAULT_CONFIG.items():
             setattr(config, key, value)
         if self._state_dir is not None:
-            keystore_file = self._state_dir / "keystore.json"
-            keystore_file.parent.mkdir(parents=True, exist_ok=True)
-            with contextlib.suppress(OSError):
-                keystore_file.touch(mode=0o600)
+            keystore_file = self._state_dir / KEYSTORE_NAME
+            _ensure_keystore(keystore_file)
             config.keystore = f"JsonKeyStore:{keystore_file}"
         return config
 

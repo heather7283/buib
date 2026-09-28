@@ -74,10 +74,13 @@ class HidSession:
         controller: Any,
         *,
         on_change: Callable[[], None] | None = None,
+        log_traceback: bool = True,
     ) -> None:
         self._sink = sink
         self._controller = controller
         self._on_change = on_change
+        #: Log the full traceback of a Bluetooth failure, not just its message.
+        self._log_traceback = log_traceback
         self._status = SessionStatus()
         self._link: HidLink | None = None
         self._converter: ReportConverter | None = None
@@ -182,7 +185,14 @@ class HidSession:
             await self._teardown()
             raise
         except (BluetoothError, DescriptorError) as error:
-            logger.warning("connection to %s failed: %s", address, error)
+            # The message reaches the client; the traceback is what makes a
+            # failure like a broken key store diagnosable, so it is logged too.
+            logger.warning(
+                "connection to %s failed: %s",
+                address,
+                error,
+                exc_info=error if self._log_traceback else None,
+            )
             await self._teardown()
             self._set(state=SessionState.DISCONNECTED, address=None, error=str(error))
         except Exception as error:  # pragma: no cover - defensive
@@ -253,6 +263,7 @@ class HidSession:
     async def _handle_disconnect(self, reason: str) -> None:
         await self._teardown()
         self._set(state=SessionState.DISCONNECTED, address=None, name=None, error=reason)
+        logger.info("disconnected: %s", reason)
 
     async def _teardown(self) -> None:
         """Release everything the session holds, keeping the sink alive."""

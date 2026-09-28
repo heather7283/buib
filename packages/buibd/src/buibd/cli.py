@@ -96,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="direction hat switches count in (default: %(default)s)",
     )
     parser.add_argument(
+        "--log-traceback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="log the full traceback of a Bluetooth failure, not just the message",
+    )
+    parser.add_argument(
         "--log-level",
         choices=_LOG_LEVELS,
         default="info",
@@ -131,6 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         pair=args.pair,
         hat_direction=args.hat,
         connect=args.connect,
+        log_traceback=args.log_traceback,
     )
     try:
         daemon = Daemon(config)

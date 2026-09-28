@@ -7,6 +7,10 @@ of the "why doesn't this keyboard work" bugs live.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+
 import pytest
 from buibd.bluetooth import (
     SDP_HID_BATTERY_POWER_ATTRIBUTE_ID,
@@ -29,6 +33,7 @@ from buibd.bluetooth import (
     parse_address,
 )
 from bumble.core import UUID
+from bumble.keys import JsonKeyStore
 from bumble.sdp import DataElement
 from descriptors import BOOT_KEYBOARD
 
@@ -198,8 +203,6 @@ def test_a_full_hid_service_record_is_understood(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(bluetooth.bumble.sdp, "Client", FakeSdpClient)
 
-    import asyncio
-
     descriptor = asyncio.run(bluetooth.fetch_hid_descriptor(connection=object()))  # type: ignore[arg-type]
 
     assert descriptor.name == "MX Keys"
@@ -255,8 +258,6 @@ def test_a_device_without_a_report_descriptor_is_rejected(
 
     monkeypatch.setattr(bluetooth.bumble.sdp, "Client", FakeSdpClient)
 
-    import asyncio
-
     descriptor = asyncio.run(bluetooth.fetch_hid_descriptor(connection=object()))  # type: ignore[arg-type]
     assert descriptor.report_descriptor == b""
     assert descriptor.boot_device is True
@@ -300,3 +301,83 @@ def test_the_hid_host_is_reused_across_connections() -> None:
     second = controller.host
     assert first is second
     assert sorted(device.psms) == [0x0011, 0x0013]
+
+
+# -- the key store ----------------------------------------------------------
+
+
+def test_the_default_keystore_is_a_file_bumble_can_read(tmp_path: Path) -> None:
+    """Regression: an empty key store file made every connection fail.
+
+    bumble's JsonKeyStore tolerates a missing file but not an empty one, and
+    reports it as "Expecting value: line 1 column 1 (char 0)" - which is what a
+    daemon that creates the file up front produces on its first connect.
+    """
+    from buibd.bluetooth import BluetoothController
+
+    controller = BluetoothController(state_dir=tmp_path)
+    config = controller._load_config()
+
+    assert config.keystore == f"JsonKeyStore:{tmp_path / 'keystore.json'}"
+    database, key_map = asyncio.run(
+        JsonKeyStore("__DEFAULT__", str(tmp_path / "keystore.json")).load()
+    )
+    assert key_map == {}
+    assert database == {"__DEFAULT__": {}}  # bumble adds the empty namespace
+
+
+def test_the_key_store_is_private(tmp_path: Path) -> None:
+    """Link keys are secrets: the file must not be world readable."""
+    from buibd.bluetooth import BluetoothController
+
+    controller = BluetoothController(state_dir=tmp_path)
+    controller._load_config()
+
+    mode = (tmp_path / "keystore.json").stat().st_mode
+    assert mode & 0o077 == 0, f"key store mode is {mode & 0o777:o}"
+
+
+def test_an_existing_key_store_is_never_truncated(tmp_path: Path) -> None:
+    from buibd.bluetooth import BluetoothController
+
+    state = {"__DEFAULT__": {"AA:BB:CC:DD:EE:FF": {"address_type": 1}}}
+    keystore = tmp_path / "keystore.json"
+    keystore.write_text(json.dumps(state), encoding="utf-8")
+
+    BluetoothController(state_dir=tmp_path)._load_config()
+
+    assert json.loads(keystore.read_text(encoding="utf-8")) == state
+
+
+def test_an_empty_key_store_is_repaired(tmp_path: Path) -> None:
+    """Older versions left an empty file behind; that must not be fatal."""
+    from buibd.bluetooth import BluetoothController
+
+    keystore = tmp_path / "keystore.json"
+    keystore.touch()
+
+    BluetoothController(state_dir=tmp_path)._load_config()
+
+    assert json.loads(keystore.read_text(encoding="utf-8")) == {}
+    assert _load_keys(keystore)[1] == {}
+
+
+def _load_keys(path: Path) -> tuple[dict, dict]:
+    """Load a key store the way bumble does, so the file has to be valid."""
+    return asyncio.run(JsonKeyStore("__DEFAULT__", str(path)).load())
+
+
+def test_a_configured_keystore_is_left_alone(tmp_path: Path) -> None:
+    """A configuration file that names its own key store is used verbatim."""
+    from buibd.bluetooth import BluetoothController
+
+    config_file = tmp_path / "device.json"
+    config_file.write_text(
+        '{"name": "test", "keystore": "JsonKeyStore:%s"}' % (tmp_path / "keys.json"),
+        encoding="utf-8",
+    )
+    controller = BluetoothController(config_path=config_file, state_dir=tmp_path)
+    config = controller._load_config()
+
+    assert config.keystore == f"JsonKeyStore:{tmp_path / 'keys.json'}"
+    assert not (tmp_path / "keystore.json").exists()

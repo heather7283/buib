@@ -62,6 +62,8 @@ class DaemonConfig:
     pair: bool = False
     hat_direction: str = "cw"
     connect: str | None = None
+    #: Log a full traceback when a Bluetooth operation fails.
+    log_traceback: bool = True
 
     def validate(self) -> None:
         if self.profile not in PROFILES:
@@ -215,7 +217,19 @@ class Daemon:
                     return await self._unpair(request)
                 case _:  # pragma: no cover - Command is exhaustive
                     return Response.fail(f"unsupported command {request.command}")
-        except (SessionError, BluetoothError) as error:
+        except SessionError as error:
+            # A rejected command is not worth a traceback: the message is the
+            # whole story and the client is going to print it.
+            return Response.fail(str(error))
+        except BluetoothError as error:
+            # These come from the stack, and a one line "JSONDecodeError" is
+            # rarely enough to go on.  The client still gets one line.
+            logger.warning(
+                "%s: %s",
+                request.command,
+                error,
+                exc_info=error if self.config.log_traceback else None,
+            )
             return Response.fail(str(error))
         except Exception as error:  # pragma: no cover - defensive
             logger.exception("command %s failed", request.command)

@@ -323,3 +323,48 @@ async def test_a_bad_address_is_rejected_before_anything_happens(
 
     assert session.status.state is SessionState.DISCONNECTED
     assert controller.link is None
+
+
+# -- diagnostics ------------------------------------------------------------
+
+
+async def test_a_failed_connection_logs_a_traceback(
+    sink: FakeEventSink, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A one line message is rarely enough to diagnose a stack failure."""
+    controller = FakeController(BOOT_KEYBOARD, fail_with="Expecting value: line 1")
+    session = make_session(controller, sink)
+
+    with caplog.at_level("WARNING"):
+        await connect(session)
+
+    record = next(r for r in caplog.records if "failed" in r.message)
+    assert record.levelname == "WARNING"
+    assert record.exc_info is not None, "the traceback should be logged"
+    assert "BluetoothError" in caplog.text
+
+
+async def test_the_traceback_can_be_turned_off(
+    sink: FakeEventSink, caplog: pytest.LogCaptureFixture
+) -> None:
+    controller = FakeController(BOOT_KEYBOARD, fail_with="Expecting value: line 1")
+    session = HidSession(sink, controller, log_traceback=False)
+
+    with caplog.at_level("WARNING"):
+        await connect(session)
+
+    record = next(r for r in caplog.records if "failed" in r.message)
+    assert record.exc_info is None
+    assert "Expecting value" in caplog.text
+
+
+async def test_the_client_only_ever_sees_one_line(
+    sink: FakeEventSink, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The response stays short even when the log gets the whole traceback."""
+    controller = FakeController(BOOT_KEYBOARD, fail_with="Expecting value: line 1")
+    session = make_session(controller, sink)
+    with caplog.at_level("WARNING"):
+        await connect(session)
+
+    assert "\n" not in (session.status.error or "")

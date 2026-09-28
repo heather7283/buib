@@ -427,3 +427,22 @@ async def test_the_real_device_class_drives_a_virtual_keyboard(
         await instance.stop()
 
     assert created.destroyed is True
+
+
+async def test_a_bluetooth_failure_is_logged_with_a_traceback(
+    daemon, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = await daemon()
+    harness.controller.fail_with = "Expecting value: line 1 column 1 (char 0)"
+
+    with caplog.at_level("WARNING"), pytest.raises(RemoteError):
+        await harness.request("connect", address="E1:CA:72:48:C4:E8", wait=True)
+
+    record = next(r for r in caplog.records if "Expecting value" in r.message)
+    assert record.exc_info is not None
+    assert "Traceback" in caplog.text
+
+    # The client is still told only what it needs to know.
+    with pytest.raises(RemoteError) as error:
+        await harness.request("connect", address="E1:CA:72:48:C4:E8", wait=True)
+    assert "\n" not in str(error.value)
