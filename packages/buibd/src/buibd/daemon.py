@@ -64,12 +64,17 @@ class DaemonConfig:
     connect: str | None = None
     #: Log a full traceback when a Bluetooth operation fails.
     log_traceback: bool = True
+    #: A descriptor inherited from the parent, signalled once the daemon is
+    #: ready.  See `Daemon.notify_ready`.
+    notification_fd: int | None = None
 
     def validate(self) -> None:
         if self.profile not in PROFILES:
             raise ValueError(
                 f"unknown profile {self.profile!r}, expected one of {', '.join(PROFILES)}"
             )
+        if self.notification_fd is not None and self.notification_fd < 0:
+            raise ValueError(f"invalid notification descriptor {self.notification_fd}")
 
 
 class Daemon:
@@ -128,7 +133,12 @@ class Daemon:
     # -- lifecycle --------------------------------------------------------
 
     async def start(self) -> None:
-        """Bring up the IPC server and, if asked, the first connection."""
+        """Bring up the IPC server and, if asked, the first connection.
+
+        The uinput device already exists by the time this runs: it is created
+        in the constructor, so that a failure to open ``/dev/uinput`` stops the
+        daemon before it ever listens.
+        """
         await self._server.start()
         logger.info(
             "buibd %s ready (pid %d, socket %s)",
@@ -137,11 +147,42 @@ class Daemon:
             self.config.socket_path,
         )
         if self.config.connect:
-            # Do not hold up startup: connecting may take a while, and the
+            # Do not hold up readiness: connecting may take a while, and the
             # uinput device and socket are already usable.
             self._startup_task = asyncio.create_task(
                 self._initial_connect(self.config.connect), name="buibd-startup-connect"
             )
+        self.notify_ready()
+
+    def notify_ready(self) -> None:
+        """Tell the parent process that the daemon is ready to be talked to.
+
+        Writes a single newline to the inherited descriptor named by
+        ``--notification-fd`` and closes it, so that a supervisor waiting for
+        readiness can stop.  The newline is the whole protocol: a supervisor
+        that sees end of file instead knows the daemon died on the way up.
+
+        Failing to signal must not stop a daemon that is otherwise working, so
+        this only ever logs - loudly, because a supervisor waiting on a
+        descriptor nobody wrote to waits forever.
+        """
+        fd = self.config.notification_fd
+        if fd is None:
+            return
+        try:
+            os.write(fd, b"\n")
+        except OSError as error:
+            logger.error(
+                "could not signal readiness on fd %d: %s; "
+                "a supervisor waiting for it will wait forever",
+                fd,
+                error,
+            )
+        else:
+            logger.debug("signalled readiness on fd %d", fd)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
     async def _initial_connect(self, address: str) -> None:
         try:
@@ -156,7 +197,8 @@ class Daemon:
 
     def request_stop(self) -> None:
         """Ask the daemon to wind down; safe to call from a signal handler."""
-        logger.info("shutting down")
+        if not self._stopping.is_set():
+            logger.info("shutting down")
         self._stopping.set()
 
     async def stop(self) -> None:

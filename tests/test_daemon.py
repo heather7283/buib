@@ -446,3 +446,83 @@ async def test_a_bluetooth_failure_is_logged_with_a_traceback(
     with pytest.raises(RemoteError) as error:
         await harness.request("connect", address="E1:CA:72:48:C4:E8", wait=True)
     assert "\n" not in str(error.value)
+
+
+# -- readiness notification -------------------------------------------------
+
+
+async def test_readiness_is_signalled_on_the_inherited_descriptor(
+    tmp_path: Path, daemon
+) -> None:
+    read_fd, write_fd = os.pipe()
+    os.set_inheritable(write_fd, True)
+    try:
+        # The daemon writes into this very process' pipe, standing in for the
+        # descriptor a parent process would have handed down.
+        harness = await daemon(notification_fd=write_fd)
+
+        with os.fdopen(read_fd, "rb", closefd=True) as reader:
+            read_fd = -1
+            assert reader.read(1) == b"\n"
+            # The daemon writes once and closes: end of file follows.
+            assert reader.read(1) == b""
+
+        # The descriptor is closed in the daemon as well.
+        assert harness.daemon.config.notification_fd == write_fd
+        with pytest.raises(OSError):
+            os.fstat(write_fd)
+    finally:
+        for fd in (read_fd, write_fd):
+            if fd >= 0:
+                with __import__("contextlib").suppress(OSError):
+                    os.close(fd)
+
+
+async def test_no_notification_by_default(daemon) -> None:
+    """Without the option nothing is written, and nothing is closed."""
+    harness = await daemon()
+    assert harness.daemon.config.notification_fd is None
+
+
+async def test_a_broken_notification_descriptor_does_not_stop_the_daemon(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A supervisor that is never told is a problem, not a reason to die."""
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)  # nobody is listening any more
+    os.close(write_fd)
+    daemon_ = Daemon(
+        DaemonConfig(socket_path=str(tmp_path / "buibd.sock"), notification_fd=99),
+        sink=FakeEventSink(),
+        controller=FakeController(BOOT_KEYBOARD),
+    )
+
+    with caplog.at_level("ERROR"):
+        await daemon_.start()
+    try:
+        assert daemon_.server.running
+        assert "could not signal readiness on fd 99" in caplog.text
+    finally:
+        await daemon_.stop()
+
+
+async def test_a_negative_descriptor_is_rejected(tmp_path: Path) -> None:
+    config = DaemonConfig(socket_path=str(tmp_path / "s.sock"), notification_fd=-1)
+    with pytest.raises(ValueError, match="invalid notification descriptor"):
+        Daemon(config, sink=FakeEventSink(), controller=FakeController(BOOT_KEYBOARD))
+
+
+def test_a_bad_descriptor_number_is_a_usage_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from buibd.cli import main
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--notification-fd", "sideways"])
+    assert exit_info.value.code == 2
+    assert "is not a file descriptor number" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--notification-fd", "-1"])
+    assert exit_info.value.code == 2
+    assert "does not exist" in capsys.readouterr().err

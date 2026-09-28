@@ -96,6 +96,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="direction hat switches count in (default: %(default)s)",
     )
     parser.add_argument(
+        "--notification-fd",
+        metavar="FD",
+        type=descriptor_number,
+        default=None,
+        help=(
+            "signal readiness by writing a newline to this inherited descriptor "
+            "and closing it (default: no notification)"
+        ),
+    )
+    parser.add_argument(
         "--log-traceback",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -109,6 +119,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"buibd {DAEMON_VERSION}")
     return parser
+
+
+def descriptor_number(text: str) -> int:
+    """Parse a file descriptor number, with a message a user can act on."""
+    try:
+        number = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a file descriptor number"
+        ) from None
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"file descriptor {number} does not exist")
+    return number
 
 
 def _state_dir(argument: pathlib.Path | None) -> pathlib.Path:
@@ -138,6 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         hat_direction=args.hat,
         connect=args.connect,
         log_traceback=args.log_traceback,
+        notification_fd=args.notification_fd,
     )
     try:
         daemon = Daemon(config)

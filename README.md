@@ -123,6 +123,37 @@ running, pair the device there instead and start the daemon with
 | `--hat {cw,ccw}`    | which way hat switches count                                                                            |
 | `--name NAME`       | the name the device reports to userspace                                                               |
 
+## Waiting for readiness
+
+A supervisor that starts the daemon and immediately pokes the socket gets a
+race. `--notification-fd` removes it: once the uinput device exists and the
+socket is bound, the daemon writes a single newline to the descriptor and closes
+it.
+
+```python
+read_fd, write_fd = os.pipe()
+os.set_inheritable(write_fd, True)  # Python marks new descriptors close-on-exec
+process = subprocess.Popen(
+    ["buibd", f"--notification-fd={write_fd}", "--socket", "/run/buib/buibd.sock"],
+    pass_fds=(write_fd,),
+)
+os.close(write_fd)  # only the child should hold it now
+os.read(read_fd, 1)  # blocks until the daemon is ready
+```
+
+The descriptor has to be inheritable — `pass_fds=`, `os.set_inheritable()` or
+`FD_CLOEXEC` cleared by hand — otherwise the child never sees it. The newline is
+the whole protocol:
+
+* a newline means ready, and the socket is already accepting connections;
+* end of file means the daemon died on the way up (a busy socket, no
+  `/dev/uinput`), and no notification was sent;
+* a blocking `buibctl ping` is then unnecessary.
+
+`--connect` is scheduled but not awaited before the notification: a slow
+Bluetooth connection does not hold up readiness, because the uinput device and
+the socket are usable while it happens.
+
 ## The protocol
 
 One JSON object per line, UTF-8, `\n` terminated, over a `SOCK_STREAM` UNIX

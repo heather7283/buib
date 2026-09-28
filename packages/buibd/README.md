@@ -12,6 +12,9 @@ Bluetooth connection, and serves `buibctl` on a UNIX socket.
 * Every Bluetooth failure is logged with its full traceback, because a one line
   message is rarely enough to diagnose one.  `--no-log-traceback` turns that
   off; the reply to `buibctl` stays a single line either way.
+* With `--notification-fd`, readiness is signalled by writing a newline to an
+  inherited descriptor and closing it, after the uinput device exists and the
+  socket is bound.  Failing to signal is logged, not fatal.
 * On disconnect the session releases the keys, buttons and contacts it was
   holding down, so nothing gets stuck.
 
