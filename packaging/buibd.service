@@ -1,0 +1,42 @@
+[Unit]
+Description=buib: Bluetooth HID to uinput bridge
+Documentation=https://github.com/example/buib
+# The bridge needs a controller; with BlueZ running, remove this line and pass
+# --transport hci-socket to buibd instead.
+After=bluetooth.target
+Wants=bluetooth.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/buibd --socket /run/buib/buibd.sock
+Restart=on-failure
+RestartSec=2
+
+# The socket lives in a directory of its own, owned by the service user.
+RuntimeDirectory=buib
+RuntimeDirectoryMode=0700
+
+# Link keys, and nothing else.
+StateDirectory=buib
+
+# Creating a uinput device needs /dev/uinput.  If the service runs as root this
+# is enough; for an unprivileged user, add the user to the "input" group and put
+# User=buib below.
+DeviceAllow=/dev/uinput rw
+SupplementaryGroups=input
+
+# Hardening: the daemon only ever needs its own socket, the uinput device and
+# the Bluetooth HCI device.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateNetwork=no
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_INET AF_INET6
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target
