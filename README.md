@@ -1,3 +1,6 @@
+> [!CAUTION]
+> This software is FULLY VIBECODED for PERSONAL USE ONLY. You have been warned.
+
 # buib
 
 **B**luetooth **u**input **b**ridge: connect to a Bluetooth HID device and
