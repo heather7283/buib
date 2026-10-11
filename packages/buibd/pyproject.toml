@@ -3,7 +3,7 @@ name = "buibd"
 version = "0.1.0"
 description = "Bluetooth HID to Linux uinput bridge: the daemon"
 readme = "README.md"
-license = "MIT"
+license = "Unlicense"
 requires-python = ">=3.11"
 dependencies = [
     "buib-protocol",

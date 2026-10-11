@@ -3,7 +3,7 @@ name = "buib-protocol"
 version = "0.1.0"
 description = "Wire protocol shared between the buibd daemon and the buibctl client"
 readme = "README.md"
-license = "MIT"
+license = "Unlicense"
 requires-python = ">=3.11"
 dependencies = []
 

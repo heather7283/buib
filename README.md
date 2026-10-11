@@ -230,6 +230,3 @@ packaging/buibd.service       systemd unit
 config/classic1.json          sample bumble device configuration
 ```
 
-## Licence
-
-MIT.
